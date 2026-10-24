@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pocket Notes</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-brand">
+      <span class="brand-badge">PN</span>
+      <h1 class="brand-title">Pocket Notes</h1>
+    </div>
+    <button id="btn-save-tab" class="btn btn-secondary" type="button" title="Lưu tab hiện tại vào ghi chú">
+      + Tab hiện tại
+    </button>
+  </header>
+
+  <div id="status-banner" class="status-banner hidden" role="alert" aria-live="polite"></div>
+
+  <section class="search-section">
+    <label for="search-input" class="sr-only">Tìm kiếm ghi chú</label>
+    <input type="search" id="search-input" class="search-input" placeholder="Tìm kiếm ghi chú..." autocomplete="off">
+  </section>
+
+  <section class="form-section">
+    <h2 id="form-heading" class="section-title">Tạo ghi chú mới</h2>
+    <form id="note-form" novalidate>
+      <input type="hidden" id="note-id">
+      <div class="form-group">
+        <label for="note-title" class="form-label">Tiêu đề <span class="required-mark">*</span></label>
+        <input type="text" id="note-title" class="form-input" maxlength="120" placeholder="Ví dụ: Tài liệu tham khảo dự án" required>
+      </div>
+      <div class="form-group">
+        <label for="note-content" class="form-label">Nội dung</label>
+        <textarea id="note-content" class="form-textarea" rows="3" maxlength="4000" placeholder="Ghi chép chi tiết hoặc ý tưởng..."></textarea>
+      </div>
+      <div class="form-group">
+        <label for="note-url" class="form-label">Liên kết liên quan (http/https)</label>
+        <input type="url" id="note-url" class="form-input" placeholder="https://example.com">
+      </div>
+      <div class="form-actions">
+        <button type="submit" id="btn-submit" class="btn btn-primary">Lưu ghi chú</button>
+        <button type="button" id="btn-cancel" class="btn btn-ghost hidden">Hủy chỉnh sửa</button>
+      </div>
+    </form>
+  </section>
+
+  <main class="notes-section">
+    <div class="notes-header">
+      <h2 class="section-title">Danh sách ghi chú</h2>
+      <span id="notes-count" class="notes-count">0 ghi chú</span>
+    </div>
+    <ul id="notes-list" class="notes-list" aria-live="polite"></ul>
+    <div id="empty-state" class="empty-state hidden">
+      <p class="empty-text">Chưa có ghi chú nào. Hãy tạo mới hoặc lưu tab đang mở!</p>
+    </div>
+  </main>
+
+  <script src="core.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

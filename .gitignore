@@ -1,0 +1,4 @@
+.anti-codex/
+__pycache__/
+output/
+node_modules/

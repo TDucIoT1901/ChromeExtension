@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "Pocket Notes",
+  "version": "1.0.0",
+  "description": "Ghi chú nhanh và lưu trữ liên kết tab hiện tại trên trình duyệt.",
+  "permissions": [
+    "storage",
+    "activeTab"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
