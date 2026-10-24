@@ -15,5 +15,10 @@ is the available conservative bound for Flash; it is not a Flash-specific meter.
 Quota polling cannot guarantee a provider-enforced hard cap. Stop on unreadable
 quota, permission errors, lack of useful progress or task completion.
 
-Current user preference (2026-10-24, latest instruction): Codex handles fixes;
-do not send source to Anti until the user explicitly authorizes it again.
+User authorization (2026-10-24, latest instruction): finish cloud collaboration.
+Source under extension/ and regression tests may be supplied to Anti for scoped
+proposals and to Codex for review. No credentials, unrelated files or chat history.
+One-time supplemental Codex grant: account usage was 25%; allow at most 5 more
+percentage points in the weekly window ending at Unix 1793428548. Stop at 28%
+account usage, reserving 2 points below the absolute 30% ceiling. Preserve the
+original usage ledger and count all other account sessions; Anti budgets unchanged.

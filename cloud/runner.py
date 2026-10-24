@@ -13,7 +13,7 @@ import sys
 import time
 
 import quota_client
-from quota_parser import snapshot, save
+from quota_parser import snapshot, save, percent, stamp
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE = ROOT / '.anti-codex'
@@ -27,11 +27,27 @@ class Budget:
         self.path = path
         self.data = json.loads(path.read_text()) if path.exists() else {'pools': {}, 'history': []}
 
+    def stop_at(self, key, reset, baseline):
+        """One explicitly approved, period-bound grant; never reset usage history."""
+        normal = baseline + 23
+        grant_path = self.path.with_name('authorization.json')
+        if key != 'codex' or not grant_path.exists():
+            return normal
+        grant = json.loads(grant_path.read_text(encoding='utf-8'))
+        if set(grant) != {'reset', 'cap_used', 'stop_used', 'extra_points'}:
+            raise RuntimeError('Invalid budget authorization')
+        if (stamp(grant['reset']) != 1793428548 or grant['extra_points'] != 5 or
+            percent(grant['cap_used']) != 30 or percent(grant['stop_used']) != 28):
+            raise RuntimeError('Unrecognized budget authorization')
+        return grant['stop_used'] if reset == grant['reset'] else normal
+
     def update(self, week, short, now):
         if any(k not in week for k in POOLS):
             raise RuntimeError('Missing actual quota pool; no model call permitted')
         for key in POOLS:
             fresh = week[key]
+            percent(fresh['used'])
+            stamp(fresh['reset'])
             old = self.data['pools'].get(key)
             if old is None:
                 # Include the current local Codex setup chat in the same budget.
@@ -47,7 +63,7 @@ class Budget:
             old['peak'] = max(old['peak'], fresh['used'])
             # Explicit one-time exception granted by user for Anti before 14:32.
             exempt = key.startswith('anti:') and now < 1792827120
-            if not exempt and old['peak'] - old['base'] >= 23:
+            if not exempt and old['peak'] >= self.stop_at(key, old['reset'], old['base']):
                 save(self.path, self.data)
                 raise RuntimeError('Weekly budget stop: ' + key + ' (2 point reserve)')
             if old['peak'] >= 99:
@@ -98,7 +114,7 @@ def call(target, prompt, run, index, budget, deadline):
     prefix.with_suffix('.prompt.txt').write_text(prompt, encoding='utf-8')
     if target == 'anti':
         model = 'gemini-3.8-flash-medium' if index == 1 else 'gemini-4-argon-medium'
-        args = ['agy', '--sandbox', '--model', model, '--output-format', 'json', '-p', prompt]
+        args = ['agy', '--sandbox', '--mode', 'plan', '--model', model, '--output-format', 'json', '-p', prompt]
         payload = None
     else:
         args = ['codex', 'exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check', '-']
@@ -116,7 +132,7 @@ def call(target, prompt, run, index, budget, deadline):
                     proc.wait(timeout=15)
                 except subprocess.TimeoutExpired:
                     budget.check()
-                    if time.time() >= deadline or time.monotonic() - start > 600:
+                    if time.time() >= deadline or time.monotonic() - start > 480:
                         raise RuntimeError('Model deadline reached; inspect saved output before retry')
             if proc.returncode:
                 raise RuntimeError(f'{target} failed; see {prefix}.err')
@@ -167,11 +183,11 @@ def run_job():
         status = {'status': 'running', 'started': time.time(), 'rounds': []}
         save(run / 'status.json', status)
         budget = Budget(STATE / 'budget.json')
-        deadline = time.time() + 1800
+        deadline = time.time() + 1200
         feedback = ('Inspect correctness, especially failed storage writes, duplicate submits, invalid stored records, '
                     'saving tab while editing, and empty search. Fix concrete issues only. Preserve Vietnamese UI.')
         try:
-            for n in range(3):
+            for n in range(2):
                 source = {p: (ROOT / p).read_text(encoding='utf-8') for p in ALLOWED}
                 prompt = ('You are Anti, proposing source text for Pocket Notes MV3 extension. NO TOOLS, filesystem, '
                           'skills, commands, agents or peer calls. All source is below. Codex host applies and tests. '
@@ -216,6 +232,7 @@ def run_job():
         status['finished'] = time.time()
         save(run / 'status.json', status)
         print(json.dumps(status, ensure_ascii=False), flush=True)
+        return status['status'] == 'static_review_pass'
 
 
 if __name__ == '__main__':
@@ -225,9 +242,15 @@ if __name__ == '__main__':
     os.chdir(ROOT)
     STATE.mkdir(exist_ok=True)
     if args.action == 'run':
-        run_job()
+        sys.exit(0 if run_job() else 1)
     elif args.action == 'quota':
         print(json.dumps(Budget(STATE / 'budget.json').check(), indent=2))
     else:
-        path = Path((STATE / 'latest.txt').read_text().strip())
-        print((path / 'status.json').read_text())
+        latest = STATE / 'latest.txt'
+        if latest.exists():
+            path = Path(latest.read_text().strip())
+            if path.parent != STATE or not path.name.startswith('cloud-'):
+                raise RuntimeError('Invalid run status path')
+            print((path / 'status.json').read_text())
+        else:
+            print('{"status":"not_started"}')

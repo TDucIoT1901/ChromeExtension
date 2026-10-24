@@ -47,6 +47,7 @@ chọn **Code → Codespaces → Create codespace on main**. Cấu hình `.devco
 chuẩn bị Node, Python, tmux và hai CLI từ nguồn chính thức; không khởi chạy model.
 Việc đăng nhập hai tài khoản trên máy cloud do người dùng thực hiện.
 
-Hiện tại người dùng chọn **Codex tự xử lý, chưa gửi mã cho Anti**. Vì vậy chưa
-bật chạy phối hợp. Khi muốn đổi lựa chọn, xem [hướng dẫn cloud](cloud/README.md).
+Người dùng đã cho phép hoàn thiện phối hợp: Anti đề xuất mã, bộ điều phối chạy
+kiểm thử, Codex kiểm tra và trả phản hồi khi cần sửa. Mỗi tác vụ tối đa 20 phút,
+dừng khi hoàn thành, gặp lỗi hoặc chạm ngân sách. Xem [hướng dẫn cloud](cloud/README.md).
 Máy cloud độc lập với máy cá nhân nhưng vẫn chịu thời gian tự dừng của Codespaces.

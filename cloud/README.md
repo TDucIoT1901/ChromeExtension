@@ -1,8 +1,8 @@
 # Anti + Codex on cloud
 
-Current user choice: Codex works alone; do not send code to Anti. The launcher
-refuses to run without `.anti-codex/ALLOW_ANTI`. Create that marker only after
-the user explicitly authorizes sending this project's source and tests to Anti.
+Current user authorization: complete cloud collaboration with extension source
+and regression tests shared with Anti for proposals and Codex for review.
+The launcher requires `.anti-codex/ALLOW_ANTI` for authorized sharing runs.
 It is not an authentication credential or a CLI permission bypass.
 
 Run from an existing Linux Codespace/VM with agy, codex, node, Python and tmux,
@@ -14,8 +14,8 @@ and both accounts already signed in. No API key or new paid service is configure
 
 Stop: create `.anti-codex/STOP`; the quota monitor cancels its own worker at the
 next check. Never remove a live lock or restart a failed job without inspecting
-partial source changes, status and logs. A run has at most 3 Anti/Codex rounds,
-10 minutes per call and 30 minutes total. It exits on completion or any blocker.
+partial source changes, status and logs. A run has at most 2 Anti/Codex rounds,
+8 minutes per call and 20 minutes total. It exits on completion or any blocker.
 
 Anti generates proposed extension source from supplied files. The controller
 applies only a fixed file list, runs Node regression tests, and supplies actual
@@ -35,9 +35,19 @@ stops the run. Existing ledger is reused. Confirmed new periods use baseline 0.
 Anti has a one-time user-approved exception before 24 Oct 2026 14:32 Asia/Saigon.
 Polling and provider rounding mean this is NOT a guaranteed hard 25% cap.
 
+The user approved 5 additional Codex account points when total usage was 25%.
+Only for the window ending at Unix 1793428548, ignored file
+`.anti-codex/authorization.json` may contain
+`{"reset":1793428548,"cap_used":30,"stop_used":28,"extra_points":5}`.
+This stops at 28% total, reserving 2 points below 30%, without resetting the
+original ledger, changing any Anti budget or expanding any future week.
+
 Closing the laptop does not stop remote Linux processes. Stopping/rebuilding
 Codespaces does. Codespaces also has idle and maximum lifetime limits; this is
-not an always-on service. No auto-resume is promised if the host stops.
+not an always-on service. A 20-minute job fits the default 30-minute idle window
+when launched from a connected session. Earlier host stops still interrupt it.
+No auto-resume is promised. Do not fabricate activity to defeat host timeouts
+or silently provision paid infrastructure.
 https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle
 
 `static_review_pass` means Node tests plus a completed Codex source review.

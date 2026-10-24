@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$HOME/.local/bin:$PATH"
 cd "$(dirname "$0")/.."
 mkdir -p .anti-codex
 if [[ ! -f .anti-codex/ALLOW_ANTI ]]; then
@@ -15,6 +16,7 @@ if [[ -f .anti-codex/STOP ]]; then
   exit 1
 fi
 python3 -m unittest discover -s cloud -p test_runner.py
+node --test tests/*.cjs
 python3 cloud/runner.py quota
 tmux new-session -d -s pocket-notes -c "$PWD" 'python3 cloud/runner.py run > .anti-codex/cloud.log 2>&1'
 echo 'Cloud worker launched. Verify status and logs; tmux alone is not completion.'
