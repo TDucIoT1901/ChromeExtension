@@ -17,9 +17,12 @@ Tiện ích mở rộng ghi chú nhanh và lưu trữ liên kết tab cho Google
 │   ├── popup.html      # Giao diện popup (HTML ngữ nghĩa, không dùng inline script)
 │   ├── popup.css       # Định dạng giao diện 390px phong cách dark green
 │   ├── core.js         # Module logic thuần túy (hỗ trợ cả Browser và Node CommonJS)
-│   └── popup.js        # Logic điều khiển DOM và tích hợp chrome API
+│   ├── popup.js        # Giao diện gửi yêu cầu tới dịch vụ nền
+│   └── background.js   # Xếp hàng thao tác, bảo vệ ghi chú khi mở nhiều popup
 ├── tests/
-│   └── core.test.cjs   # Bộ kiểm thử đơn vị độc lập dùng node:test
+│   ├── core.test.cjs   # Logic thuần
+│   ├── popup.test.cjs  # Giao diện và xử lý lỗi qua API mô phỏng
+│   └── background.test.cjs # Ghi đồng thời và phát hiện xung đột
 └── README.md
 ```
 
@@ -33,7 +36,7 @@ Tiện ích mở rộng ghi chú nhanh và lưu trữ liên kết tab cho Google
 Bộ kiểm thử sử dụng test runner tích hợp sẵn của Node.js (`node:test`), không cần cài đặt thêm bất kỳ thư viện ngoài nào:
 ```bash
 node --test tests/*.cjs
-python3 -m unittest discover -s cloud -p test_runner.py
+python3 -m unittest discover -s cloud -p 'test*.py'
 ```
 
 Kiểm thử gồm logic thuần và mô phỏng API Chrome: lỗi lưu, bấm lưu liên tiếp,
@@ -47,7 +50,11 @@ chọn **Code → Codespaces → Create codespace on main**. Cấu hình `.devco
 chuẩn bị Node, Python, tmux và hai CLI từ nguồn chính thức; không khởi chạy model.
 Việc đăng nhập hai tài khoản trên máy cloud do người dùng thực hiện.
 
-Người dùng đã cho phép hoàn thiện phối hợp: Anti đề xuất mã, bộ điều phối chạy
-kiểm thử, Codex kiểm tra và trả phản hồi khi cần sửa. Mỗi tác vụ tối đa 20 phút,
+Luồng phối hợp: Codex lập kế hoạch, Anti sửa trực tiếp mã nguồn trong phạm vi được
+giao, bộ điều phối kiểm thử, Codex review, Anti sửa lại nếu cần. Mỗi tác vụ tối đa 20 phút,
 dừng khi hoàn thành, gặp lỗi hoặc chạm ngân sách. Xem [hướng dẫn cloud](cloud/README.md).
 Máy cloud độc lập với máy cá nhân nhưng vẫn chịu thời gian tự dừng của Codespaces.
+
+GitHub Actions chạy kiểm thử Node/Python và kiểm tra khóa tiến trình thật trên Linux.
+Workflow này không gọi model; việc đăng nhập và quyền ghi của hai CLI trên Codespace
+cần kiểm chứng riêng. Xem trạng thái nghiệm thu trong cloud/IMPLEMENTATION_PLAN.md.

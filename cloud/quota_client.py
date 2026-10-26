@@ -72,11 +72,37 @@ def weekly_used(result):
         raise RuntimeError('Khong co so lieu quota tuan; khong goi worker.')
     return max(values)
 
+def _extract_identity(payload):
+    if not isinstance(payload, dict):
+        return None
+    candidates = []
+    for key in ('accountId', 'id', 'userId'):
+        if key in payload:
+            candidates.append(payload.get(key))
+    acc_obj = payload.get('account')
+    if isinstance(acc_obj, dict):
+        for key in ('accountId', 'id', 'userId'):
+            if key in acc_obj:
+                candidates.append(acc_obj.get(key))
+    found = None
+    for val in candidates:
+        if val is None:
+            continue
+        if not isinstance(val, str) or not val.strip():
+            raise RuntimeError('Malformed or empty Codex account identity field')
+        cleaned = val.strip()
+        if found is not None and cleaned != found:
+            raise RuntimeError('Conflicting Codex account identities within single response')
+        found = cleaned
+    return found
+
+
 def quota(raw=False):
     # Uses existing CLI sign-in, never reads credentials or starts a model turn.
     proc = subprocess.Popen(['codex', 'app-server'], cwd=ROOT,
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.DEVNULL, text=True, encoding='utf-8')
+                            stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
+                            start_new_session=True)
     messages = queue.Queue()
 
     def reader():
@@ -112,27 +138,65 @@ def quota(raw=False):
             if message.get('id') == identity:
                 if 'error' in message:
                     raise RuntimeError('App-server tu choi doc quota; khong goi worker.')
-                return message.get('result', {})
+                res = message.get('result')
+                if not isinstance(res, dict):
+                    raise RuntimeError('App-server tra ket qua khong hop le.')
+                return res
 
     try:
         send({'id': 1, 'method': 'initialize', 'params': {
             'clientInfo': {'name': 'personal_design_guard', 'version': '1.0.0'}}})
         receive(1)
         send({'method': 'initialized', 'params': {}})
-        send({'id': 2, 'method': 'account/rateLimits/read'})
-        result = receive(2)
+
+        send({'id': 2, 'method': 'account/read', 'params': {'refreshToken': False}})
+        acc_before = receive(2)
+
+        send({'id': 3, 'method': 'account/rateLimits/read'})
+        result = receive(3)
+
+        send({'id': 4, 'method': 'account/read', 'params': {'refreshToken': False}})
+        acc_after = receive(4)
+
+        id_before = _extract_identity(acc_before)
+        id_rate = _extract_identity(result)
+        id_after = _extract_identity(acc_after)
+
+        if (id_before is None) != (id_after is None):
+            raise RuntimeError('Codex account/read returned inconsistent identity presence')
+
+        if id_before is not None and id_after is not None:
+            if id_before != id_after:
+                raise RuntimeError('Codex account switched between account/read checks')
+            if id_rate is not None and id_rate != id_before:
+                raise RuntimeError('Codex account mismatch between account/read and rateLimits/read')
+            verified_id = id_before
+        else:
+            if id_rate is None:
+                raise RuntimeError('Missing Codex account identity in account/read and rateLimits/read')
+            send({'id': 5, 'method': 'account/rateLimits/read'})
+            result_after = receive(5)
+            id_rate_after = _extract_identity(result_after)
+            if not id_rate_after or id_rate_after != id_rate:
+                raise RuntimeError('Codex account switched or missing across rateLimits/read checks')
+            verified_id = id_rate
+            result = result_after
+
+        result['accountId'] = verified_id
         return result if raw else weekly_used(result)
     finally:
-        if proc.poll() is None:
-            proc.terminate()
         try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-        proc.stdin.close()
+            if proc.stdin and not proc.stdin.closed:
+                proc.stdin.close()
+        except Exception:
+            pass
+        stop_process(proc)
         thread.join(timeout=2)
-        proc.stdout.close()
+        try:
+            if proc.stdout and not proc.stdout.closed:
+                proc.stdout.close()
+        except Exception:
+            pass
 
 def anti_quota():
     proc = subprocess.Popen(['agy', '-p', '/usage'], cwd=ROOT, stdout=subprocess.PIPE,
@@ -150,12 +214,34 @@ def anti_quota():
         stop_process(proc)
 
 def stop_process(proc):
-    if proc.poll() is not None:
+    if proc is None:
         return
-    # Bridge and its CLI children share a new process group owned by this run.
-    os.killpg(proc.pid, signal.SIGTERM)
-    try:
-        proc.wait(timeout=8)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait()
+    pgid = getattr(proc, 'pid', None)
+    killpg = getattr(os, 'killpg', None)
+    if callable(killpg) and pgid is not None:
+        try:
+            killpg(pgid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            if proc.poll() is None:
+                proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            if proc.poll() is None:
+                proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+    else:
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()

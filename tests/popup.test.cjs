@@ -20,9 +20,24 @@ function harness(stored = [], deferLoad = false) {
   const get = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   let init, read;
   const writes = [];
-  const chrome = {runtime: {}, storage: {local: {
-    get(keys, cb) { read = () => cb({pocket_notes_data: stored}); if (!deferLoad) read(); },
-    set(data, cb) { writes.push({data: structuredClone(data), cb}); }
+  // Popup unit tests mock worker replies. background.test.cjs tests real worker code.
+  const chrome = {runtime: {sendMessage(message, cb) {
+    if (message.type === 'notes:list') {
+      read = () => cb({ok: true, notes: stored}); if (!deferLoad) read(); return;
+    }
+    let next;
+    if (message.type === 'notes:create') {
+      if (stored.length >= 300) {cb({ok: false, error: 'Giới hạn 300 ghi chú.'});return;}
+      next = [core.createNote(message.input), ...stored];
+    } else if (message.type === 'notes:update') {
+      next = stored.map(n => n.id === message.id ? core.updateNote(n, message.input) : n);
+    } else if (message.type === 'notes:delete') {
+      next = stored.filter(n => n.id !== message.id);
+    } else {throw Error('Unexpected message');}
+    writes.push({data: structuredClone({pocket_notes_data: next}), cb() {
+      if (!chrome.runtime.lastError) stored = next;
+      cb({ok: true, notes: next});
+    }});
   }}, tabs: {query(q, cb) {cb([{title: 'New tab', url: 'https://example.org/'}]);}, create() {}}};
   const document = {getElementById: get, createElement: () => new Element(),
     addEventListener(k, f) {if (k === 'DOMContentLoaded') init = f;},

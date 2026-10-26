@@ -8,49 +8,131 @@ It is not an authentication credential or a CLI permission bypass.
 Run from an existing Linux Codespace/VM with agy, codex, node, Python and tmux,
 and both accounts already signed in. No API key or new paid service is configured.
 
-    bash cloud/start.sh
-    python3 cloud/runner.py status
-    cat .anti-codex/cloud.log
+```bash
+# Start a fresh run
+bash cloud/start.sh
+
+# Or resume a previous interrupted completed stage
+bash cloud/start.sh --resume
+
+# Optional: pass explicit per-job completion authorization
+bash cloud/start.sh --run .anti-codex/cloud-example-run --completion-auth .anti-codex/completion_auth.json
+
+# Check worker and quota status
+python3 cloud/runner.py status
+python3 cloud/runner.py quota
+cat .anti-codex/cloud.log
+```
 
 Stop: create `.anti-codex/STOP`; the quota monitor cancels its own worker at the
 next check. Never remove a live lock or restart a failed job without inspecting
 partial source changes, status and logs. A run has at most 2 Anti/Codex rounds,
-8 minutes per call and 20 minutes total. It exits on completion or any blocker.
+5 total model calls, 8 minutes per call and 20 minutes total. It exits on completion or any blocker.
 
-Anti generates proposed extension source from supplied files. The controller
-applies only a fixed file list, runs Node regression tests, and supplies actual
-results plus source to Codex for independent review. Codex feedback is returned
-to Anti if changes are needed. No security/approval bypass flags are used.
-Snapshots before changes and complete responses remain under `.anti-codex`.
-This avoids requiring command permission in Anti headless mode.
+## Architecture and Workflow
+
+The collaboration follows a strict multi-stage protocol:
+1. **Codex Plan**: Codex receives current source and regression tests with no tools,
+   producing a structured implementation plan and acceptance criteria.
+2. **Anti Implementation**: Anti receives the Codex plan, current source, and tests.
+   Anti directly modifies allowed extension files (`extension/manifest.json`,
+   `extension/popup.html`, `extension/popup.css`, `extension/popup.js`,
+   `extension/core.js`, `extension/background.js`) under ordinary sandbox permissions.
+3. **Host Test & Scope Audit**: The host snapshots workspace files before Anti runs,
+   audits tracked/untracked project scope after the run (failing if any file outside
+   allowed scope was touched), validates manifest permissions, and runs Node regression
+   tests (`tests/*.cjs`).
+4. **Codex Review**: Codex independently reviews updated source, actual test source,
+   acceptance criteria, and test runner exit code and stdout/stderr with no tools.
+   If issues or test failures exist, actual feedback is persisted and passed to Anti
+   for a bounded revision round.
+5. **Static Review Pass**: Marked when all Node tests pass and Codex returns a
+   verdict of `PASS` with zero issues.
+
+Anti runs with ordinary CLI sandbox permissions (no bypass flags). Permission
+denials fail immediately; they do not trigger a silent text-only fallback.
+
+## Checkpoint, Crash Recovery and Resume
+
+Every run maintains a persisted `checkpoint.json` recording:
+- `stage`: `not_started`, `planned`, `implemented`, `reviewed`, `revised`,
+  `reviewed_revision`, `static_review_pass`, `needs_attention`, or `blocked`.
+- `in_flight`: boolean indicating an active mutation or model call.
+- `source_hashes`: SHA-256 hashes of all allowed source files.
+- `test_hashes`: SHA-256 hashes of all regression test files.
+- Bounded counters: `round` (max 2), `model_calls` (counted persistently before spawning, max 5),
+  and wall-clock `deadline`.
+
+**Recovery and State Machine rules**:
+- All resume and status run paths must resolve directly under `.anti-codex` and reject symlinks/traversal.
+- If a run was interrupted during an in-flight mutation (`in_flight: true`),
+  resuming marks the stage as `needs_attention` and fails closed. It will NEVER
+  automatically replay uncertain mutations.
+- `needs_attention` and `blocked` stages never replay automatically.
+- Stage-driven resume:
+  - `planned` -> Anti implementation.
+  - `implemented` / `revised` -> Node tests then Codex review WITHOUT replaying Anti.
+  - `reviewed` with `CHANGES` -> advances round with stored actual review feedback.
+  - `static_review_pass` -> validates exact source and test hash sets, identity, goal,
+    and run path before returning PASS with zero model calls. Never accepts missing/empty hashes or added files.
+- Resuming completed stages requires:
+  1. No `.anti-codex/STOP` marker.
+  2. Single-writer lock acquisition (`runner.lock`).
+  3. Verified quota check and account identity match.
+  4. Exact SHA-256 hash match for all allowed files and regression tests.
+  5. Unexpired deadline.
+
+## Account and Budget Binding
 
 Budget: 25 weekly percentage points per account pool, early stop at 23 points.
-Codex starts at the original 1% reading for the present weekly window, so local
-setup/chat use counts too. Other sessions' usage counts conservatively. Flash
-has no separate quota meter in the observed `/usage` output: the shared Gemini
-pool caps it conservatively; Argon additionally has its own pool. New ledgers
-use baseline zero outside the original Codex window, conservatively counting
-all usage already consumed in that period. Unknown quota
-stops the run. Existing ledger is reused. Confirmed new periods use baseline 0.
-Anti has a one-time user-approved exception before 24 Oct 2026 14:32 Asia/Saigon.
-Polling and provider rounding mean this is NOT a guaranteed hard 25% cap.
+- **Account Identity**: Non-empty `account_id` is strictly required for every budget update.
+  The ledger binds to this account identity. Fabricated fallback identities are forbidden.
+- **Account Switch**: Switching accounts fails closed (`RuntimeError`) to prevent
+  unauthorized budget resets or cross-account allowance leakage.
+- **Unbound Ledgers**: Historical ledgers missing account IDs will not be silently
+  adopted; explicit manual reconciliation is required.
+- **Legacy Supplement**: The one-time supplement for window 1793428548 (stop at 28)
+  requires the verified original account in the ignored authorization file's
+  `codex_account_id`, matching the retained ledger. An active old four-field
+  authorization requires reconciliation; history must not be deleted.
+- **Reset Drift & Decreases**: A reset timestamp changing before the current period
+  expires, or a decrease in reported usage, does not grant budget. It preserves
+  peak usage and stops pending manual reconciliation.
+- **Rollover**: Normal period rollover occurs only after `now >= old_reset` and a
+  genuine later reset (`fresh_reset >= old_reset + 86400`), resetting baseline to 0.
 
-The user approved 5 additional Codex account points when total usage was 25%.
-Only for the window ending at Unix 1793428548, ignored file
-`.anti-codex/authorization.json` may contain
-`{"reset":1793428548,"cap_used":30,"stop_used":28,"extra_points":5}`.
-This stops at 28% total, reserving 2 points below 30%, without resetting the
-original ledger, changing any Anti budget or expanding any future week.
+## Optional Per-Job Completion Authorization
 
-Closing the laptop does not stop remote Linux processes. Stopping/rebuilding
-Codespaces does. Codespaces also has idle and maximum lifetime limits; this is
-not an always-on service. A 20-minute job fits the default 30-minute idle window
-when launched from a connected session. Earlier host stops still interrupt it.
-No auto-resume is promised. Do not fabricate activity to defeat host timeouts
-or silently provision paid infrastructure.
-https://docs.github.com/en/codespaces/about-codespaces/understanding-the-codespace-lifecycle
+To finish concrete system completion tasks when authorized by the user, an optional
+per-job completion override may be configured:
 
-`static_review_pass` means Node tests plus a completed Codex source review.
-It does not claim browser installation/UI verification. The default models are
-Gemini 3.8 Flash Medium first, Gemini 4 Argon Medium for follow-up corrections;
-Codex keeps its configured model. No credits, resets, purchases or deployment.
+File schema (`.anti-codex/completion_auth.json`):
+```json
+{
+  "codex_account_id": "example-verified-account-id",
+  "reset": 1793517578,
+  "run_id": "cloud-example-run",
+  "goal": "Fix Pocket Notes MV3 extension correctness issues and ensure all regression tests pass",
+  "stop_used": 28,
+  "cap_used": 30
+}
+```
+
+- Requires `codex_account_id`, `reset`, `goal`, `stop_used`, `cap_used`, and `run_id` (or `job_id`).
+- Must satisfy `stop_used <= cap_used - 2`, with `cap_used <= 100` and `stop_used <= 98`.
+- Scoped strictly to the concrete run ID, goal, account, and reset timestamp; malformed explicit auth fails closed.
+- Uses the explicitly authorized Codex stop threshold for that run only.
+- `--completion-auth` requires `--run`; the run name must match the private file.
+  A new run path must not exist. Resume uses the same explicit path and authorization.
+  The example does not grant an allowance: record the user's actual authorization
+  privately, including the verified account and current weekly period.
+- Does NOT apply to Anti (Anti retains 25 budget, stop at 23).
+- Does NOT bypass provider near-full limits (>=99%) or short-window limits (>=95%).
+
+## Environment and Verification Notes
+
+- Codespaces has idle timeouts and lifetime limits. Closing the browser disconnects
+  the terminal, but remote tmux processes persist within Codespace limits. A host
+  stop or rebuild interrupts the environment.
+- `static_review_pass` validates Node mock regression tests and Codex static code
+  review. It does NOT claim installed-browser UI/runtime verification.

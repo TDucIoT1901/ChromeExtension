@@ -33,6 +33,17 @@ def stamp(value):
     return value
 
 
+def extract_account_id(codex):
+    if not isinstance(codex, dict):
+        raise ValueError('Invalid Codex quota response; expected dict')
+    account_id = codex.get('accountId')
+    if not account_id and isinstance(codex.get('account'), dict):
+        account_id = codex['account'].get('id')
+    if not account_id or not isinstance(account_id, str) or not account_id.strip():
+        raise ValueError('Missing or empty Codex accountId in quota response')
+    return account_id.strip()
+
+
 def snapshot(codex, anti):
     buckets = codex.get('rateLimitsByLimitId')
     bucket = buckets.get('codex') if buckets else codex.get('rateLimits')

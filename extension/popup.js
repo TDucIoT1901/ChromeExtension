@@ -2,12 +2,18 @@
   'use strict';
 
   const core = window.PocketNotesCore;
-  const STORAGE_KEY = 'pocket_notes_data';
+  const ACTIONS = core.ACTIONS || {
+    LIST_NOTES: 'notes:list',
+    CREATE_NOTE: 'notes:create',
+    UPDATE_NOTE: 'notes:update',
+    DELETE_NOTE: 'notes:delete'
+  };
 
   let state = {
     notes: [],
     searchQuery: '',
     editingId: null,
+    editingSnapshot: null,
     loaded: false,
     busy: false
   };
@@ -47,69 +53,82 @@
       dom.btnSaveTab].forEach(el => { el.disabled = disabled; });
   }
 
-  function loadNotesFromStorage() {
-    if (!chrome.storage || !chrome.storage.local) {
-      showStatus('Không thể truy cập chrome.storage.local.', true);
+  function sendWorkerRequest(payload, onSuccess, onFailure) {
+    if (typeof chrome === 'undefined' || !chrome.runtime ||
+        typeof chrome.runtime.sendMessage !== 'function') {
+      const msg = 'Không thể kết nối dịch vụ nền của tiện ích.';
+      if (typeof onFailure === 'function') onFailure(msg);
+      else showStatus(msg, true);
       return;
     }
 
-    chrome.storage.local.get([STORAGE_KEY], function (result) {
-      if (chrome.runtime.lastError) {
-        showStatus('Lỗi khi đọc bộ nhớ: ' + chrome.runtime.lastError.message, true);
-        return;
-      }
-      const stored = result[STORAGE_KEY] === undefined ? [] : result[STORAGE_KEY];
-      const ids = new Set();
-      if (!Array.isArray(stored) || stored.length > core.MAX_NOTES || stored.some(note => {
-        if (!note || typeof note.id !== 'string' || !note.id || ids.has(note.id) ||
-            ['title', 'content', 'url'].some(key => typeof note[key] !== 'string') ||
-            !core.validateNoteInput(note).valid) return true;
-        ids.add(note.id);
-        return false;
-      })) {
-        showStatus('Dữ liệu lưu trữ không hợp lệ. Đã khóa ghi để bảo vệ ghi chú hiện có.', true);
-        return;
-      }
-      state.notes = stored;
-      state.loaded = true;
-      setBusy(false);
-      renderNotes();
-    });
-  }
-
-  function saveNotesToStorage(nextNotes, callback) {
-    if (!state.loaded || state.busy) return;
-    if (!chrome.storage || !chrome.storage.local) {
-      showStatus('Không thể lưu: thiếu quyền storage.', true);
-      return;
-    }
-
-    if (nextNotes.length > core.MAX_NOTES) {
-      showStatus('Đã vượt quá giới hạn tối đa ' + core.MAX_NOTES + ' ghi chú.', true);
-      return;
-    }
-
-    const payload = {};
-    payload[STORAGE_KEY] = nextNotes;
     setBusy(true);
 
-    try { chrome.storage.local.set(payload, function () {
+    try {
+      chrome.runtime.sendMessage(payload, function (response) {
+        setBusy(false);
+
+        if (chrome.runtime && chrome.runtime.lastError) {
+          const msg = 'Lỗi giao tiếp dịch vụ nền: ' + chrome.runtime.lastError.message;
+          if (typeof onFailure === 'function') onFailure(msg);
+          else showStatus(msg, true);
+          return;
+        }
+
+        if (!response || typeof response !== 'object') {
+          const msg = 'Phản hồi từ dịch vụ nền không hợp lệ.';
+          if (typeof onFailure === 'function') onFailure(msg);
+          else showStatus(msg, true);
+          return;
+        }
+
+        if (response.ok !== true) {
+          const msg = (typeof response.error === 'string' && response.error)
+            ? response.error
+            : 'Không thể thực hiện thao tác với bộ nhớ.';
+          if (typeof onFailure === 'function') onFailure(msg, response);
+          else showStatus(msg, true);
+          return;
+        }
+
+        const validation = core.validateStoredNotes(response.notes);
+        if (!validation.valid) {
+          if (typeof onFailure === 'function') onFailure(validation.error, response);
+          else showStatus(validation.error, true);
+          return;
+        }
+
+        onSuccess(validation.notes, response);
+      });
+    } catch (error) {
       setBusy(false);
-      if (chrome.runtime.lastError) {
-        showStatus('Lỗi lưu trữ: ' + chrome.runtime.lastError.message, true);
-        return;
-      }
-      state.notes = nextNotes;
-      if (typeof callback === 'function') callback();
-    }); } catch (error) {
-      setBusy(false);
-      showStatus('Lỗi lưu trữ: ' + error.message, true);
+      const msg = 'Lỗi giao tiếp dịch vụ nền: ' + (error && error.message ? error.message : String(error));
+      if (typeof onFailure === 'function') onFailure(msg);
+      else showStatus(msg, true);
     }
+  }
+
+  function loadNotesFromBackground() {
+    sendWorkerRequest(
+      { type: ACTIONS.LIST_NOTES },
+      function (validatedNotes) {
+        state.notes = validatedNotes;
+        state.loaded = true;
+        setBusy(false);
+        renderNotes();
+      },
+      function (errorMsg) {
+        state.loaded = false;
+        setBusy(false);
+        showStatus(errorMsg, true);
+      }
+    );
   }
 
   function resetForm() {
     if (state.busy) return;
     state.editingId = null;
+    state.editingSnapshot = null;
     dom.noteId.value = '';
     dom.noteTitle.value = '';
     dom.noteContent.value = '';
@@ -121,7 +140,12 @@
 
   function populateFormForEdit(note) {
     if (!state.loaded || state.busy) return;
+    if (!core.validateStoredNote(note)) {
+      showStatus('Ghi chú cần chỉnh sửa không hợp lệ.', true);
+      return;
+    }
     state.editingId = note.id;
+    state.editingSnapshot = core.cloneNote(note);
     dom.noteId.value = note.id;
     dom.noteTitle.value = note.title || '';
     dom.noteContent.value = note.content || '';
@@ -147,6 +171,7 @@
     dom.emptyState.classList.add('hidden');
 
     filtered.forEach(function (note) {
+      const noteSnapshot = core.cloneNote(note);
       const li = document.createElement('li');
       li.className = 'note-item';
 
@@ -166,7 +191,7 @@
       btnEdit.className = 'btn btn-ghost btn-small';
       btnEdit.textContent = 'Sửa';
       btnEdit.addEventListener('click', function () {
-        populateFormForEdit(note);
+        populateFormForEdit(noteSnapshot);
       });
       actions.appendChild(btnEdit);
 
@@ -175,7 +200,7 @@
       btnDelete.className = 'btn btn-ghost btn-small';
       btnDelete.textContent = 'Xóa';
       btnDelete.addEventListener('click', function () {
-        deleteNote(note.id);
+        deleteNote(noteSnapshot);
       });
       actions.appendChild(btnDelete);
 
@@ -216,14 +241,32 @@
     });
   }
 
-  function deleteNote(id) {
+  function deleteNote(noteOrId) {
     if (!state.loaded || state.busy) return;
-    const nextNotes = state.notes.filter((n) => n.id !== id);
-    saveNotesToStorage(nextNotes, function () {
-      if (state.editingId === id) resetForm();
-      showStatus('Đã xóa ghi chú thành công.', false);
-      renderNotes();
-    });
+    const snapshot = (noteOrId && typeof noteOrId === 'object')
+      ? core.cloneNote(noteOrId)
+      : core.cloneNote(state.notes.find(function (n) { return n.id === noteOrId; }));
+
+    if (!snapshot || !core.validateStoredNote(snapshot)) {
+      showStatus('Không tìm thấy ghi chú hợp lệ để xóa.', true);
+      return;
+    }
+
+    sendWorkerRequest(
+      {
+        type: ACTIONS.DELETE_NOTE,
+        id: snapshot.id,
+        snapshot: snapshot
+      },
+      function (nextNotes) {
+        state.notes = nextNotes;
+        if (state.editingId === snapshot.id) {
+          resetForm();
+        }
+        showStatus('Đã xóa ghi chú thành công.', false);
+        renderNotes();
+      }
+    );
   }
 
   function handleFormSubmit(event) {
@@ -236,29 +279,49 @@
       url: dom.noteUrl.value
     };
 
-    try {
-      if (state.editingId) {
-        const index = state.notes.findIndex((n) => n.id === state.editingId);
-        if (index === -1) {
-          throw new Error('Không tìm thấy ghi chú để cập nhật.');
-        }
-        const nextNotes = state.notes.slice();
-        nextNotes[index] = core.updateNote(state.notes[index], rawInput);
-        saveNotesToStorage(nextNotes, function () {
+    const validation = core.validateNoteInput(rawInput);
+    if (!validation.valid) {
+      showStatus(validation.error, true);
+      return;
+    }
+
+    if (state.editingId) {
+      const snapshot = (state.editingSnapshot && state.editingSnapshot.id === state.editingId)
+        ? core.cloneNote(state.editingSnapshot)
+        : core.cloneNote(state.notes.find(function (n) { return n.id === state.editingId; }));
+
+      if (!snapshot || !core.validateStoredNote(snapshot)) {
+        showStatus('Không tìm thấy ghi chú để cập nhật.', true);
+        return;
+      }
+
+      sendWorkerRequest(
+        {
+          type: ACTIONS.UPDATE_NOTE,
+          id: state.editingId,
+          snapshot: snapshot,
+          input: validation.sanitized
+        },
+        function (nextNotes) {
+          state.notes = nextNotes;
           showStatus('Đã cập nhật ghi chú.', false);
           resetForm();
           renderNotes();
-        });
-      } else {
-        const newNote = core.createNote(rawInput);
-        saveNotesToStorage([newNote, ...state.notes], function () {
+        }
+      );
+    } else {
+      sendWorkerRequest(
+        {
+          type: ACTIONS.CREATE_NOTE,
+          input: validation.sanitized
+        },
+        function (nextNotes) {
+          state.notes = nextNotes;
           showStatus('Đã lưu ghi chú mới.', false);
           resetForm();
           renderNotes();
-        });
-      }
-    } catch (err) {
-      showStatus(err.message, true);
+        }
+      );
     }
   }
 
@@ -304,7 +367,7 @@
       renderNotes();
     });
 
-    loadNotesFromStorage();
+    loadNotesFromBackground();
   }
 
   document.addEventListener('DOMContentLoaded', init);

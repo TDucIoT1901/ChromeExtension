@@ -10,6 +10,13 @@
   const MAX_TITLE_LENGTH = 120;
   const MAX_CONTENT_LENGTH = 4000;
   const MAX_NOTES = 300;
+  const STORAGE_KEY = 'pocket_notes_data';
+  const ACTIONS = Object.freeze({
+    LIST_NOTES: 'notes:list',
+    CREATE_NOTE: 'notes:create',
+    UPDATE_NOTE: 'notes:update',
+    DELETE_NOTE: 'notes:delete'
+  });
 
   function isValidUrl(urlString) {
     if (typeof urlString !== 'string') return false;
@@ -87,13 +94,80 @@
       throw new Error(validation.error);
     }
 
+    const nowMs = Date.now();
+    const prevMs = existingNote.updatedAt ? Date.parse(existingNote.updatedAt) : NaN;
+    const nextMs = !isNaN(prevMs) && nowMs <= prevMs ? prevMs + 1 : nowMs;
+
     return {
       ...existingNote,
       title: validation.sanitized.title,
       content: validation.sanitized.content,
       url: validation.sanitized.url,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date(nextMs).toISOString()
     };
+  }
+
+  function cloneNote(note) {
+    if (!note || typeof note !== 'object') return null;
+    const copy = {
+      id: note.id,
+      title: note.title,
+      content: note.content,
+      url: note.url
+    };
+    if (note.createdAt !== undefined) copy.createdAt = note.createdAt;
+    if (note.updatedAt !== undefined) copy.updatedAt = note.updatedAt;
+    return copy;
+  }
+
+  function validateStoredNote(note) {
+    if (!note || typeof note !== 'object' || Array.isArray(note)) return false;
+    if (typeof note.id !== 'string' || !note.id.trim()) return false;
+    if (typeof note.title !== 'string' || typeof note.content !== 'string' || typeof note.url !== 'string') {
+      return false;
+    }
+    if (note.createdAt !== undefined && typeof note.createdAt !== 'string') return false;
+    if (note.updatedAt !== undefined && typeof note.updatedAt !== 'string') return false;
+    const validation = validateNoteInput(note);
+    if (!validation.valid) return false;
+    return true;
+  }
+
+  function validateStoredNotes(stored) {
+    const list = stored === undefined ? [] : stored;
+    if (!Array.isArray(list) || list.length > MAX_NOTES) {
+      return {
+        valid: false,
+        error: 'Dữ liệu lưu trữ không hợp lệ. Đã khóa ghi để bảo vệ ghi chú hiện có.'
+      };
+    }
+    const ids = new Set();
+    const notes = [];
+    for (let i = 0; i < list.length; i++) {
+      const note = list[i];
+      if (!validateStoredNote(note) || ids.has(note.id)) {
+        return {
+          valid: false,
+          error: 'Dữ liệu lưu trữ không hợp lệ. Đã khóa ghi để bảo vệ ghi chú hiện có.'
+        };
+      }
+      ids.add(note.id);
+      notes.push(cloneNote(note));
+    }
+    return { valid: true, notes: notes };
+  }
+
+  function isSameNoteSnapshot(currentNote, snapshot) {
+    if (!validateStoredNote(currentNote) || !validateStoredNote(snapshot)) {
+      return false;
+    }
+    if (currentNote.id !== snapshot.id) return false;
+    if (currentNote.title !== snapshot.title) return false;
+    if (currentNote.content !== snapshot.content) return false;
+    if (currentNote.url !== snapshot.url) return false;
+    if ((currentNote.createdAt || '') !== (snapshot.createdAt || '')) return false;
+    if ((currentNote.updatedAt || '') !== (snapshot.updatedAt || '')) return false;
+    return true;
   }
 
   function filterNotes(notes, query) {
@@ -132,10 +206,16 @@
     MAX_TITLE_LENGTH: MAX_TITLE_LENGTH,
     MAX_CONTENT_LENGTH: MAX_CONTENT_LENGTH,
     MAX_NOTES: MAX_NOTES,
+    STORAGE_KEY: STORAGE_KEY,
+    ACTIONS: ACTIONS,
     isValidUrl: isValidUrl,
     validateNoteInput: validateNoteInput,
     createNote: createNote,
     updateNote: updateNote,
+    cloneNote: cloneNote,
+    validateStoredNote: validateStoredNote,
+    validateStoredNotes: validateStoredNotes,
+    isSameNoteSnapshot: isSameNoteSnapshot,
     filterNotes: filterNotes,
     formatDisplayDate: formatDisplayDate
   };
