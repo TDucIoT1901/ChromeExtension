@@ -492,14 +492,14 @@ def anti_evidence():
     )
 
 
-def call(target, prompt, run, index, budget, deadline):
+def call(target, prompt, run, index, budget, deadline, anti_round=0):
     if time.time() >= deadline:
         raise RuntimeError('Job deadline reached before model call')
     budget.check()
     prefix = run / f'{index:02}-{target}'
     prefix.with_suffix('.prompt.txt').write_text(prompt, encoding='utf-8')
     if target == 'anti':
-        model = 'gemini-3.8-flash-medium' if index <= 2 else 'gemini-4-argon-medium'
+        model = 'gemini-3.8-flash-medium' if anti_round == 0 else 'gemini-4-argon-medium'
         # Direct Anti implementation: remove --mode plan and allow ordinary sandbox edits
         args = ['agy', '--sandbox', '--model', model, '--output-format', 'json', '-p', prompt]
         payload = None
@@ -547,6 +547,20 @@ VALID_STAGES = {
 }
 
 
+def checkpoint_call_limit(checkpoint):
+    limit = checkpoint.get('model_call_limit', 5)
+    if type(limit) is int and limit == 5:
+        return 5
+    if (type(limit) is int and limit == 8 and
+        checkpoint.get('write_permission_confirmed') is True and
+        isinstance(checkpoint.get('permission_recovery_of'), str) and
+        checkpoint['permission_recovery_of'].strip() and
+        type(checkpoint.get('inherited_model_calls')) is int and
+        checkpoint['inherited_model_calls'] == 4):
+        return 8
+    raise RuntimeError('Unrecognized model-call limit; no model call allowed')
+
+
 def validate_checkpoint_evidence(checkpoint, run, account_id):
     if not isinstance(checkpoint, dict):
         raise RuntimeError('Checkpoint must be a JSON object')
@@ -578,7 +592,9 @@ def validate_checkpoint_evidence(checkpoint, run, account_id):
         raise RuntimeError('Missing or invalid deadline timestamp in checkpoint')
 
     model_calls = checkpoint.get('model_calls')
-    if type(model_calls) is not int or model_calls < 0 or model_calls > 5:
+    limit = checkpoint_call_limit(checkpoint)
+    minimum = checkpoint.get('inherited_model_calls', 0) if limit == 8 else 0
+    if type(model_calls) is not int or not minimum <= model_calls <= limit:
         raise RuntimeError(f'Missing or invalid model_calls counter in checkpoint: {model_calls}')
 
     rnd = checkpoint.get('round')
@@ -752,8 +768,9 @@ def run_job(resume=False, run_dir=None, completion_auth=None):
 
         def record_call_start(target_name):
             calls = checkpoint.get('model_calls', 0)
-            if calls >= 5:
-                raise RuntimeError(f'Maximum model calls (5) reached; refusing to call {target_name}')
+            limit = checkpoint_call_limit(checkpoint)
+            if calls >= limit:
+                raise RuntimeError(f'Maximum model calls ({limit}) reached; refusing to call {target_name}')
             checkpoint['model_calls'] = calls + 1
             checkpoint['in_flight'] = True
             checkpoint['in_flight_target'] = target_name
@@ -843,7 +860,7 @@ def run_job(resume=False, run_dir=None, completion_auth=None):
 
                     anti_prompt += anti_evidence()
                     try:
-                        call('anti', anti_prompt, run, call_index, budget, deadline)
+                        call('anti', anti_prompt, run, call_index, budget, deadline, anti_round=r)
                     except Exception:
                         audit_workspace_scope(before_workspace)
                         raise

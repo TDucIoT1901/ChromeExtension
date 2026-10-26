@@ -96,6 +96,62 @@ class CommandDenialTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 verify_failure_artifact({**raw, **changed}, quota_interruption=True)
 
+    def permission_failure(self):
+        return {**self.checkpoint(), 'model_calls': 4,
+                'reason': 'Anti denied action(s): write_file; no retry'}
+
+    def test_write_permission_recovery_is_scoped_and_keeps_four_calls(self):
+        previous = self.permission_failure()
+        with self.assertRaises(RuntimeError):
+            recovery_checkpoint(previous, 'next', time.time())
+        result = recovery_checkpoint(previous, 'next', time.time(),
+                                     write_permission_confirmed=True)
+        self.assertEqual(result['model_calls'], 4)
+        self.assertEqual(runner.checkpoint_call_limit(result), 8)
+        self.assertEqual(runner.checkpoint_call_limit(previous), 5)
+        with self.assertRaises(RuntimeError):
+            runner.checkpoint_call_limit({'model_call_limit': 8})
+        with self.assertRaises(RuntimeError):
+            runner.checkpoint_call_limit({**result, 'write_permission_confirmed': False})
+        with self.assertRaises(RuntimeError):
+            recovery_checkpoint({**previous, 'permission_recovery_of': 'older'},
+                                'another', time.time(), write_permission_confirmed=True)
+        verify_failure_artifact({'denied_actions': [{'action': 'write_file'}]},
+                                write_permission_confirmed=True)
+        with self.assertRaises(RuntimeError):
+            verify_failure_artifact({'denied_actions': [{'action': 'command'}]},
+                                    write_permission_confirmed=True)
+
+    def test_permission_attempt_can_finish_two_rounds_at_eight_total_calls(self):
+        runner.STATE.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runner.STATE) as folder:
+            state = Path(folder)
+            run = state/'cloud-permission-recovery'
+            run.mkdir()
+            checkpoint = recovery_checkpoint(self.permission_failure(), run.name,
+                                              time.time(), write_permission_confirmed=True)
+            (run/'checkpoint.json').write_text(json.dumps(checkpoint))
+            (state/'budget.json').write_text(json.dumps(dict(
+                codex_account_id='fixture-account', pools={}, history=[])))
+            (state/'ALLOW_ANTI').write_text('test fixture')
+            fake_lock = SimpleNamespace(LOCK_EX=2, LOCK_NB=4, flock=Mock())
+            results = ['implementation',
+                       {'verdict':'CHANGES', 'issues':['specific fix'], 'limitations':[]},
+                       'revision', {'verdict':'PASS', 'issues':[], 'limitations':[]}]
+            with patch('runner.STATE', state), patch('runner.sys.platform', 'linux'), \
+                 patch('runner.fcntl', fake_lock), patch('runner.Budget.check'), \
+                 patch('runner.run_node_tests', return_value=Mock(returncode=0, stdout='ok', stderr='')), \
+                 patch('runner.audit_workspace_scope', return_value=[]), \
+                 patch('runner.call', side_effect=results) as model:
+                self.assertTrue(runner.run_job(resume=True, run_dir=str(run)))
+            saved = json.loads((run/'checkpoint.json').read_text())
+            self.assertEqual(saved['model_calls'], 8)
+            self.assertEqual(saved['stage'], 'static_review_pass')
+            self.assertEqual([item.args[0] for item in model.call_args_list],
+                             ['anti', 'codex', 'anti', 'codex'])
+            anti_calls = [item for item in model.call_args_list if item.args[0] == 'anti']
+            self.assertEqual([item.kwargs['anti_round'] for item in anti_calls], [0, 1])
+
 
 if __name__ == '__main__':
     unittest.main()

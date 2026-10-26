@@ -27,7 +27,7 @@ cat .anti-codex/cloud.log
 Stop: create `.anti-codex/STOP`; the quota monitor cancels its own worker at the
 next check. Never remove a live lock or restart a failed job without inspecting
 partial source changes, status and logs. A run has at most 2 Anti/Codex rounds,
-5 total model calls, 8 minutes per call and 20 minutes total. It exits on completion or any blocker.
+5 total model calls by default, 8 minutes per call and 20 minutes total. It exits on completion or any blocker.
 
 ## Architecture and Workflow
 
@@ -71,6 +71,16 @@ all three calls and has only two calls left (implementation and review). This
 mode can be used once and cannot be chained. Startup keeps full preflight logs
 under `.anti-codex/` and prints summaries rather than simulated test checkpoints.
 
+After the operator confirms scoped extension write permission, the inspected
+four-call `write_file` denial can use `--write-permission-confirmed` once. Source,
+tests, account, quota and denial artifacts must still validate. Its successor
+retains all four calls and permits up to two implementation/review rounds, with
+an explicit total ceiling of eight for this verification only. The default
+five-call limit remains unchanged. No weekly allowance, CLI permission or past
+record is reset. The mode cannot recover another permission-recovery attempt.
+Initial implementation uses Flash; revision uses Argon, independently of the
+inherited call count. Quota guards apply to both.
+
 ## Checkpoint, Crash Recovery and Resume
 
 Every run maintains a persisted `checkpoint.json` recording:
@@ -79,7 +89,8 @@ Every run maintains a persisted `checkpoint.json` recording:
 - `in_flight`: boolean indicating an active mutation or model call.
 - `source_hashes`: SHA-256 hashes of all allowed source files.
 - `test_hashes`: SHA-256 hashes of all regression test files.
-- Bounded counters: `round` (max 2), `model_calls` (counted persistently before spawning, max 5),
+- Bounded counters: `round` (max 2), `model_calls` (counted persistently before spawning,
+  normally max 5; the explicit operator-confirmed permission recovery above has max 8),
   and wall-clock `deadline`.
 
 **Recovery and State Machine rules**:
