@@ -64,6 +64,12 @@ unchanged and can produce only one successor. Both prior calls count toward the
 same five-call ceiling, leaving at most three calls. The successor has a fresh
 bounded twenty-minute execution window; nested recovery is rejected. No model is
 launched until the operator explicitly starts it with `start.sh --resume --run`.
+The separately inspected interrupted shared-quota attempt can use
+`--quota-interruption` only with its three-call checkpoint, empty interrupted
+ERROR result, no denied actions, and unchanged source/tests. Its successor keeps
+all three calls and has only two calls left (implementation and review). This
+mode can be used once and cannot be chained. Startup keeps full preflight logs
+under `.anti-codex/` and prints summaries rather than simulated test checkpoints.
 
 ## Checkpoint, Crash Recovery and Resume
 

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import runner
-from recover_command_denial import prepare, recovery_checkpoint
+from recover_command_denial import prepare, recovery_checkpoint, verify_failure_artifact
 
 
 class CommandDenialTests(unittest.TestCase):
@@ -73,6 +73,28 @@ class CommandDenialTests(unittest.TestCase):
                 with self.assertRaises(FileExistsError):
                     prepare(source, state/'cloud-another')
                 model.assert_not_called()
+
+    def test_quota_interruption_preserves_three_calls_and_cannot_repeat(self):
+        old = {**self.checkpoint(), 'model_calls': 3, 'recovery_of': 'cloud-root',
+               'reason': 'Usage decrease detected for anti:gemini models (2.0% < 3.0%); stop pending reconciliation'}
+        result = recovery_checkpoint(old, 'cloud-final', time.time(), quota_interruption=True)
+        self.assertEqual(result['model_calls'], 3)
+        self.assertEqual(result['recovery_of'], 'cloud-root')
+        self.assertEqual(result['quota_recovery_of'], 'cloud-old')
+        with self.assertRaises(RuntimeError):
+            recovery_checkpoint({**old, 'quota_recovery_of': 'older'},
+                                'another', time.time(), quota_interruption=True)
+        with self.assertRaises(RuntimeError):
+            recovery_checkpoint({**old, 'model_calls': 4},
+                                'another', time.time(), quota_interruption=True)
+
+    def test_interruption_artifact_cannot_hide_a_permission_denial(self):
+        raw = {'status':'ERROR', 'error':'interrupted', 'response':''}
+        verify_failure_artifact(raw, quota_interruption=True)
+        for changed in ({'error':'other'}, {'response':'partial'},
+                        {'denied_actions':[{'action':'write_file'}]}):
+            with self.assertRaises(RuntimeError):
+                verify_failure_artifact({**raw, **changed}, quota_interruption=True)
 
 
 if __name__ == '__main__':

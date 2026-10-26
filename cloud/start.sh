@@ -64,9 +64,21 @@ if [[ -f .anti-codex/STOP ]]; then
   exit 1
 fi
 
-python3 -m unittest discover -s cloud -p 'test*.py'
-node --test tests/*.cjs
-python3 cloud/runner.py quota "${EXTRA_ARGS[@]}"
+if ! python3 -m unittest discover -s cloud -p 'test*.py' > .anti-codex/preflight-python.log 2>&1; then
+  tail -n 50 .anti-codex/preflight-python.log
+  exit 1
+fi
+tail -n 4 .anti-codex/preflight-python.log
+if ! node --test tests/*.cjs > .anti-codex/preflight-node.log 2>&1; then
+  tail -n 50 .anti-codex/preflight-node.log
+  exit 1
+fi
+tail -n 8 .anti-codex/preflight-node.log
+if ! python3 cloud/runner.py quota "${EXTRA_ARGS[@]}" > .anti-codex/preflight-quota.log 2>&1; then
+  tail -n 20 .anti-codex/preflight-quota.log
+  exit 1
+fi
+echo 'Quota preflight passed. Full preflight logs are in .anti-codex/.'
 
 CMD_ARGS=("python3" "cloud/runner.py" "$ACTION" "${EXTRA_ARGS[@]}")
 CMD=""
