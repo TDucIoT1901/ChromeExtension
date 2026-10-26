@@ -51,6 +51,19 @@ The collaboration follows a strict multi-stage protocol:
 
 Anti runs with ordinary CLI sandbox permissions (no bypass flags). Permission
 denials fail immediately; they do not trigger a silent text-only fallback.
+Anti receives current source and tests and is instructed to use file tools only;
+the host runs commands, git and tests. A `command` denial does not establish that
+`write_file` was denied. The result parser reports the denied action separately
+from an unsuccessful status or empty response.
+
+For the inspected case of a first-round empty SUCCESS response with exactly one
+command denial after two model calls, `recover_command_denial.py` can prepare one
+operator-invoked successor. It verifies unchanged source/test hashes, matching
+account, normal quota guard and the retained Codex plan. The original run remains
+unchanged and can produce only one successor. Both prior calls count toward the
+same five-call ceiling, leaving at most three calls. The successor has a fresh
+bounded twenty-minute execution window; nested recovery is rejected. No model is
+launched until the operator explicitly starts it with `start.sh --resume --run`.
 
 ## Checkpoint, Crash Recovery and Resume
 

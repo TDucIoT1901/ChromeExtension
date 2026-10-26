@@ -448,6 +448,39 @@ def read_test_files_summary():
     return '\n\n'.join(items)
 
 
+def anti_answer(raw):
+    result = decode(raw)
+    if not isinstance(result, dict):
+        raise RuntimeError('Invalid Anti result; no retry')
+    result = result.get('result', result)
+    if not isinstance(result, dict):
+        raise RuntimeError('Invalid Anti result envelope; no retry')
+    denied = result.get('denied_actions')
+    if denied:
+        actions = set()
+        for item in denied if isinstance(denied, list) else [denied]:
+            name = item.get('action') if isinstance(item, dict) else None
+            actions.add(name if name in ('command', 'write_file', 'read_file') else 'unknown')
+        raise RuntimeError('Anti denied action(s): ' + ', '.join(sorted(actions)) + '; no retry')
+    if result.get('status') not in ('SUCCESS', 'success'):
+        raise RuntimeError('Anti unsuccessful result; no retry')
+    answer = result.get('response')
+    if not isinstance(answer, str) or not answer.strip():
+        raise RuntimeError('Anti returned empty response')
+    return answer
+
+
+def anti_evidence():
+    return (
+        '\nUse read_file/write_file tools only within the allowed extension paths. '
+        'Do not run commands, shells, terminal tools, subprocesses, tests, git, network requests or peer agents. '
+        'The host runs all commands and tests. All source and test evidence is supplied below. '
+        'If a file tool is denied, stop and report it; do not switch to a command tool. '
+        'Return a nonempty summary of actual edits or remaining blockers.\n'
+        'CURRENT SOURCE:\n' + json.dumps(read_source_files(), indent=2)
+    )
+
+
 def call(target, prompt, run, index, budget, deadline):
     if time.time() >= deadline:
         raise RuntimeError('Job deadline reached before model call')
@@ -484,13 +517,7 @@ def call(target, prompt, run, index, budget, deadline):
     budget.check()
     raw = prefix.with_suffix('.log').read_text(encoding='utf-8')
     if target == 'anti':
-        result = decode(raw)
-        result = result.get('result', result)
-        if result.get('denied_actions') or result.get('status') not in ('SUCCESS', 'success'):
-            raise RuntimeError('Anti permission denial or unsuccessful result; no retry')
-        answer = result.get('response', '')
-        if not answer or not str(answer).strip():
-            raise RuntimeError('Anti returned empty response')
+        answer = anti_answer(raw)
     else:
         events = [json.loads(line) for line in raw.splitlines() if line.strip()]
         answers = [e['item']['text'] for e in events if e.get('type') == 'item.completed'
@@ -803,6 +830,7 @@ def run_job(resume=False, run_dir=None, completion_auth=None):
                             'REGRESSION TESTS (do not edit tests):\n' + tests_summary
                         )
 
+                    anti_prompt += anti_evidence()
                     try:
                         call('anti', anti_prompt, run, call_index, budget, deadline)
                     except Exception:
