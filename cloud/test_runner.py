@@ -122,6 +122,7 @@ class BudgetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent.parent / '.anti-codex') as d:
             guard = Mock()
             guard.check.side_effect = [None, RuntimeError('Unreadable quota')]
+            guard.anti_model_policy = 'flash-then-argon'
             worker = Mock(pid=4321)
             worker.poll.side_effect = [None, None, 0]
             worker.wait.side_effect = [subprocess.TimeoutExpired('test', 15), 0]

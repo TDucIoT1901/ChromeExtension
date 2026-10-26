@@ -36,6 +36,19 @@ ALLOWED = (
     'extension/background.js',
 )
 POOLS = ('codex', 'anti:gemini models', 'anti:gemini 4 argon')
+DEFAULT_ANTI_POLICY = 'flash-then-argon'
+
+
+def validate_anti_policy(value):
+    if value not in (DEFAULT_ANTI_POLICY, 'flash-only'):
+        raise RuntimeError('Unknown Anti model policy')
+    return value
+
+
+def anti_model(policy, round_number):
+    validate_anti_policy(policy)
+    return ('gemini-3.8-flash-medium' if policy == 'flash-only' or round_number == 0
+            else 'gemini-4-argon-medium')
 
 
 def validate_run_path(run_path, must_not_exist=False):
@@ -132,8 +145,10 @@ def parse_and_validate_completion_auth(auth_input, run_id=None, job_id=None, goa
 
 
 class Budget:
-    def __init__(self, path, completion_auth=None, job_id=JOB_ID, goal=JOB_GOAL, run_id=None):
+    def __init__(self, path, completion_auth=None, job_id=JOB_ID, goal=JOB_GOAL, run_id=None,
+                 anti_model_policy=DEFAULT_ANTI_POLICY):
         self.path = Path(path)
+        self.anti_model_policy = validate_anti_policy(anti_model_policy)
         self.completion_auth = completion_auth
         self.job_id = job_id
         self.goal = goal
@@ -214,6 +229,10 @@ class Budget:
                 raise RuntimeError('Unbound legacy ledger without codex_account_id; manual reconciliation required')
             self.data['codex_account_id'] = account_id
 
+        active_pools = set(POOLS)
+        if self.anti_model_policy == 'flash-only':
+            active_pools.remove('anti:gemini 4 argon')
+        blocked = []
         for key in POOLS:
             fresh = week[key]
             percent(fresh['used'])
@@ -265,10 +284,16 @@ class Budget:
             stop_threshold = self.stop_at(key, old['reset'], old['base'], account_id=self.data.get('codex_account_id'))
             budget_used = old.get('charged_used', old['peak']) if key.startswith('anti:') else old['peak']
             if not exempt and budget_used >= stop_threshold:
+                blocked.append(key)
+            if old['peak'] >= 99 and key in active_pools:
                 save(self.path, self.data)
-                raise RuntimeError('Weekly budget stop: ' + key + ' (2 point reserve)')
-            if old['peak'] >= 99:
                 raise RuntimeError('Account quota nearly exhausted: ' + key)
+
+        self.data['blocked_pools'] = blocked
+        if set(blocked) & active_pools:
+            save(self.path, self.data)
+            raise RuntimeError('Weekly budget stop: ' + ', '.join(k for k in blocked if k in active_pools) +
+                               ' (2 point reserve)')
 
         for key in ('codex', 'anti:gemini models'):
             if key not in short or short[key]['used'] >= 95:
@@ -499,7 +524,7 @@ def call(target, prompt, run, index, budget, deadline, anti_round=0):
     prefix = run / f'{index:02}-{target}'
     prefix.with_suffix('.prompt.txt').write_text(prompt, encoding='utf-8')
     if target == 'anti':
-        model = 'gemini-3.8-flash-medium' if anti_round == 0 else 'gemini-4-argon-medium'
+        model = anti_model(budget.anti_model_policy, anti_round)
         # Direct Anti implementation: remove --mode plan and allow ordinary sandbox edits
         args = ['agy', '--sandbox', '--model', model, '--output-format', 'json', '-p', prompt]
         payload = None
@@ -625,7 +650,7 @@ def validate_checkpoint_evidence(checkpoint, run, account_id):
             raise RuntimeError(f'Missing changed_files record for stage {stage}: {changed_rec}')
 
 
-def run_job(resume=False, run_dir=None, completion_auth=None):
+def run_job(resume=False, run_dir=None, completion_auth=None, anti_model_policy=None):
     if not (STATE / 'ALLOW_ANTI').is_file():
         raise RuntimeError('Anti transfer is not authorized. Obtain renewed user authorization first.')
     if sys.platform != 'linux':
@@ -650,13 +675,16 @@ def run_job(resume=False, run_dir=None, completion_auth=None):
                 raise RuntimeError(f'Invalid run directory for resume: {run}')
 
             run_id = run.name
-            budget = Budget(STATE / 'budget.json', completion_auth=completion_auth, job_id=run_id, goal=JOB_GOAL, run_id=run_id)
+            checkpoint = json.loads((run / 'checkpoint.json').read_text(encoding='utf-8'))
+            policy = validate_anti_policy(checkpoint.get('anti_model_policy', DEFAULT_ANTI_POLICY))
+            if anti_model_policy is not None and anti_model_policy != policy:
+                raise RuntimeError('Cannot change a resumed run model policy')
+            budget = Budget(STATE / 'budget.json', completion_auth=completion_auth, job_id=run_id,
+                            goal=JOB_GOAL, run_id=run_id, anti_model_policy=policy)
             budget.check()
             account_id = budget.data.get('codex_account_id')
             if not account_id:
                 raise RuntimeError('Missing Codex account identity in budget ledger')
-
-            checkpoint = json.loads((run / 'checkpoint.json').read_text(encoding='utf-8'))
 
             # Check in-flight status: interrupted mutations must mark needs_attention and not replay
             if checkpoint.get('in_flight'):
@@ -738,7 +766,9 @@ def run_job(resume=False, run_dir=None, completion_auth=None):
             run_id = run.name
             (STATE / 'latest.txt').write_text(str(run), encoding='utf-8')
 
-            budget = Budget(STATE / 'budget.json', completion_auth=completion_auth, job_id=run_id, goal=JOB_GOAL, run_id=run_id)
+            policy = validate_anti_policy(anti_model_policy or DEFAULT_ANTI_POLICY)
+            budget = Budget(STATE / 'budget.json', completion_auth=completion_auth, job_id=run_id,
+                            goal=JOB_GOAL, run_id=run_id, anti_model_policy=policy)
             budget.check()
             account_id = budget.data.get('codex_account_id')
             if not account_id:
@@ -752,6 +782,7 @@ def run_job(resume=False, run_dir=None, completion_auth=None):
                 'run_id': run_id,
                 'job_id': run_id,
                 'goal': JOB_GOAL,
+                'anti_model_policy': policy,
                 'codex_account_id': account_id,
                 'source_hashes': compute_source_hashes(),
                 'test_hashes': compute_test_hashes(),
@@ -967,15 +998,18 @@ if __name__ == '__main__':
     parser.add_argument('action', choices=['run', 'resume', 'quota', 'status'])
     parser.add_argument('--run', dest='run_dir', help='Specific run directory for new run, resume or status')
     parser.add_argument('--completion-auth', dest='completion_auth', help='Path to completion authorization JSON')
+    parser.add_argument('--flash-only', action='store_true', help='Never call Argon; retain its ledger and stop threshold')
     args = parser.parse_args()
     os.chdir(ROOT)
     STATE.mkdir(exist_ok=True)
     if args.completion_auth and not args.run_dir:
         raise RuntimeError('completion auth requires explicit --run')
     if args.action == 'run':
-        sys.exit(0 if run_job(resume=False, run_dir=args.run_dir, completion_auth=args.completion_auth) else 1)
+        sys.exit(0 if run_job(resume=False, run_dir=args.run_dir, completion_auth=args.completion_auth,
+                             anti_model_policy='flash-only' if args.flash_only else None) else 1)
     elif args.action == 'resume':
-        sys.exit(0 if run_job(resume=True, run_dir=args.run_dir, completion_auth=args.completion_auth) else 1)
+        sys.exit(0 if run_job(resume=True, run_dir=args.run_dir, completion_auth=args.completion_auth,
+                             anti_model_policy='flash-only' if args.flash_only else None) else 1)
     elif args.action == 'quota':
         if args.run_dir:
             run_id = validate_run_path(args.run_dir).name
@@ -988,7 +1022,15 @@ if __name__ == '__main__':
                     run_id = JOB_ID
             else:
                 run_id = JOB_ID
-        budget = Budget(STATE / 'budget.json', completion_auth=args.completion_auth, job_id=run_id, goal=JOB_GOAL, run_id=run_id)
+        policy = 'flash-only' if args.flash_only else DEFAULT_ANTI_POLICY
+        run_checkpoint = STATE / run_id / 'checkpoint.json'
+        if run_checkpoint.is_file():
+            saved_policy = validate_anti_policy(json.loads(run_checkpoint.read_text()).get('anti_model_policy', DEFAULT_ANTI_POLICY))
+            if args.flash_only and saved_policy != 'flash-only':
+                raise RuntimeError('Model policy differs from prepared run')
+            policy = saved_policy
+        budget = Budget(STATE / 'budget.json', completion_auth=args.completion_auth, job_id=run_id,
+                        goal=JOB_GOAL, run_id=run_id, anti_model_policy=policy)
         print(json.dumps(budget.check(), indent=2))
     else:
         if args.run_dir:

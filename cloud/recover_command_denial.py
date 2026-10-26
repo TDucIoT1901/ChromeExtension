@@ -67,7 +67,8 @@ def verify_failure_artifact(raw, quota_interruption=False, write_permission_conf
         raise RuntimeError('Anti artifact does not match the inspected failure; no recovery')
 
 
-def prepare(source_path, target_path, quota_interruption=False, write_permission_confirmed=False):
+def prepare(source_path, target_path, quota_interruption=False, write_permission_confirmed=False,
+            flash_only=False):
     if runner.sys.platform != 'linux' or runner.fcntl is None:
         raise RuntimeError('Run this on the Linux cloud host')
     if (runner.STATE / 'STOP').exists() or not (runner.STATE / 'ALLOW_ANTI').is_file():
@@ -78,12 +79,14 @@ def prepare(source_path, target_path, quota_interruption=False, write_permission
         runner.fcntl.flock(lock, runner.fcntl.LOCK_EX | runner.fcntl.LOCK_NB)
         old_bytes = (source / 'checkpoint.json').read_bytes()
         previous = json.loads(old_bytes)
-        budget = runner.Budget(runner.STATE / 'budget.json')
+        policy = 'flash-only' if flash_only else runner.DEFAULT_ANTI_POLICY
+        budget = runner.Budget(runner.STATE / 'budget.json', anti_model_policy=policy)
         budget.check()
         runner.validate_checkpoint_evidence(previous, source, budget.data.get('codex_account_id'))
         runner.verify_hashes(previous.get('source_hashes'), previous.get('test_hashes'))
         result = recovery_checkpoint(previous, target.name, time.time(),
                                      quota_interruption, write_permission_confirmed)
+        result['anti_model_policy'] = policy
         filename = ('04-anti.log' if write_permission_confirmed else
                     '03-anti.log' if quota_interruption else '02-anti.log')
         raw = json.loads((source / filename).read_text(encoding='utf-8'))
@@ -112,6 +115,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--from-run', required=True)
     parser.add_argument('--to-run', required=True)
+    parser.add_argument('--flash-only', action='store_true', help='Only Flash; never use exhausted Argon pool')
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--quota-interruption', action='store_true',
                         help='Only the inspected interrupted shared-quota attempt; preserves 3 calls')
@@ -119,4 +123,4 @@ if __name__ == '__main__':
                        help='Operator confirms scoped extension write permission; preserves 4 calls, total cap 8')
     args = parser.parse_args()
     runner.os.chdir(runner.ROOT)
-    prepare(args.from_run, args.to_run, args.quota_interruption, args.write_permission_confirmed)
+    prepare(args.from_run, args.to_run, args.quota_interruption, args.write_permission_confirmed, args.flash_only)

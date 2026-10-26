@@ -114,6 +114,15 @@ Every run maintains a persisted `checkpoint.json` recording:
 
 ## Account and Budget Binding
 
+`--flash-only` is an explicit model policy: both implementation and revision use
+Flash, and Argon is never selected. Pass it to both preparation and `start.sh`.
+The policy is stored in the checkpoint and cannot be changed during resume.
+All three pool meters remain required and all ledger values are retained.
+An exhausted unused Argon pool is recorded in `blocked_pools`; it blocks the
+default mixed-model policy but does not spend or block Flash's separate budget.
+Flash/shared-pool and Codex stops still block every call in this mode. No stop
+threshold, baseline or quota history is reset, and there is no automatic fallback.
+
 An explicitly confirmed early Codex reset can be reconciled with
 `python3 cloud/prepare_verification.py --help` before a new verification run.
 Supply the exact old/new reset timestamps, the highest observed previous Codex

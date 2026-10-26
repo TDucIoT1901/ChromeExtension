@@ -15,6 +15,10 @@ while [[ $# -gt 0 ]]; do
       ACTION="resume"
       shift
       ;;
+    --flash-only)
+      EXTRA_ARGS+=(--flash-only)
+      shift
+      ;;
     --run)
       if [[ -z "${2:-}" ]]; then
         echo "Error: --run requires a path argument"
@@ -33,7 +37,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: bash cloud/start.sh [--resume|resume] [--run <path>] [--completion-auth <path>]"
+      echo "Usage: bash cloud/start.sh [--resume|resume] [--flash-only] [--run <path>] [--completion-auth <path>]"
       exit 1
       ;;
   esac
