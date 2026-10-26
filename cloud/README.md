@@ -84,6 +84,16 @@ Every run maintains a persisted `checkpoint.json` recording:
 
 ## Account and Budget Binding
 
+An explicitly confirmed early Codex reset can be reconciled with
+`python3 cloud/prepare_verification.py --help` before a new verification run.
+Supply the exact old/new reset timestamps, the highest observed previous Codex
+usage across sessions, and unchanged-period Anti peak floors. The helper verifies
+the signed-in identity against the retained ledger, holds the runner lock, backs
+up the original ledger, archives the old Codex peak and preserves Anti baselines,
+periods and peak usage. It preflights the normal 25-point/23-stop guard before
+committing any change. It neither redeems a reset nor launches a model; CLI
+permission policies are untouched. Reusing an existing run directory is rejected.
+
 Budget: 25 weekly percentage points per account pool, early stop at 23 points.
 - **Account Identity**: Non-empty `account_id` is strictly required for every budget update.
   The ledger binds to this account identity. Fabricated fallback identities are forbidden.
