@@ -118,9 +118,15 @@ Budget: 25 weekly percentage points per account pool, early stop at 23 points.
   requires the verified original account in the ignored authorization file's
   `codex_account_id`, matching the retained ledger. An active old four-field
   authorization requires reconciliation; history must not be deleted.
-- **Reset Drift & Decreases**: A reset timestamp changing before the current period
-  expires, or a decrease in reported usage, does not grant budget. It preserves
-  peak usage and stops pending manual reconciliation.
+- **Reset Drift**: A reset timestamp changing before the current period expires
+  stops pending manual reconciliation. No automatic allowance is granted.
+- **Codex Usage Decreases**: Preserve peak usage and stop for reconciliation.
+- **Anti Display Fluctuations**: Preserve the raw peak and a persisted
+  `charged_used` counter. A decrease never refunds charges; every subsequent
+  increase is charged again, including increases below the old peak. The same
+  23-point stop applies to this conservative counter. Repeated fluctuations can
+  stop a job early, but cannot enlarge the allowance. Missing/invalid quota or
+  a changed period still stops. This remains a shared-pool bound for Flash.
 - **Rollover**: Normal period rollover occurs only after `now >= old_reset` and a
   genuine later reset (`fresh_reset >= old_reset + 86400`), resetting baseline to 0.
 

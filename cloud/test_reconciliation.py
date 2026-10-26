@@ -63,6 +63,16 @@ class ReconciliationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Ledger period'):
             self.apply()
 
+    def test_reconciliation_cannot_erase_existing_anti_debits(self):
+        pool = self.ledger['pools']['anti:gemini models']
+        pool.update(charged_used=6, last_used=1)
+        result = self.apply()['pools']['anti:gemini models']
+        self.assertEqual(result['charged_used'], 6)
+        self.assertEqual(result['last_used'], 1)
+        pool['charged_used'] = 23
+        with self.assertRaisesRegex(RuntimeError, 'Anti budget stop'):
+            self.apply()
+
 
 if __name__ == '__main__':
     unittest.main()

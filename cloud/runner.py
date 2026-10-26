@@ -234,7 +234,7 @@ class Budget:
                             f'(expected {old_reset}, got {fresh_reset}); stop pending reconciliation'
                         )
                     last_used = old.get('last_used', old['peak'])
-                    if fresh['used'] < last_used:
+                    if key == 'codex' and fresh['used'] < last_used:
                         old['peak'] = max(old['peak'], fresh['used'])
                         save(self.path, self.data)
                         raise RuntimeError(
@@ -248,12 +248,23 @@ class Budget:
                     old = dict(reset=fresh_reset, base=0, peak=fresh['used'], last_used=fresh['used'])
                     self.data['pools'][key] = old
 
+            if key.startswith('anti:'):
+                previous_display = percent(old.get('last_used', old['peak']))
+                charged = percent(old.get('charged_used', old['peak']))
+                # Never refund a display decrease. Every subsequent rise is
+                # charged again, even below a previously observed peak. This
+                # may stop early on jitter, but cannot enlarge the allowance.
+                old['charged_used'] = max(old['peak'], fresh['used'],
+                                          charged + max(0, fresh['used'] - previous_display))
+                if fresh['used'] < previous_display:
+                    old['display_decreases'] = old.get('display_decreases', 0) + 1
             old['peak'] = max(old['peak'], fresh['used'])
             old['last_used'] = fresh['used']
 
             exempt = key.startswith('anti:') and now < 1792827120
             stop_threshold = self.stop_at(key, old['reset'], old['base'], account_id=self.data.get('codex_account_id'))
-            if not exempt and old['peak'] >= stop_threshold:
+            budget_used = old.get('charged_used', old['peak']) if key.startswith('anti:') else old['peak']
+            if not exempt and budget_used >= stop_threshold:
                 save(self.path, self.data)
                 raise RuntimeError('Weekly budget stop: ' + key + ' (2 point reserve)')
             if old['peak'] >= 99:

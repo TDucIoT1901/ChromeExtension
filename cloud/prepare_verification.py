@@ -66,9 +66,10 @@ def reconcile(ledger, week, account_id, old_reset, new_reset, prior_peak, anti_f
             raise RuntimeError('Anti period changed; no automatic reset is authorized')
         old['peak'] = max(percent(old['peak']), percent(week[key]['used']),
                           percent(anti_floors[key]))
-        if old['peak'] >= 23:
+        if max(old['peak'], percent(old.get('charged_used', old['peak']))) >= 23:
             raise RuntimeError('Anti budget stop; no model launch allowed')
-        old['last_used'] = percent(week[key]['used'])
+        if 'charged_used' not in old:
+            old['last_used'] = percent(week[key]['used'])
     return data
 
 
